@@ -7,8 +7,7 @@ package routing;
 import core.*;
 import javafx.util.Pair;
 
-import util.Tuple;
-
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
 /**
@@ -16,19 +15,52 @@ import java.util.*;
  * <I>Spray and Wait: An Efficient Routing Scheme for Intermittently
  * Connected Mobile Networks</I> by Thrasyvoulos Spyropoulus et al.
  */
-public class MyRouter extends ActiveRouter {
-    /*	*//** identifier for the initial number of copies setting ({@value})*//*
+public class QLearningSprayAndWaitRouter extends ActiveRouter {
+    	//** identifier for the initial number of copies setting ({@value})*//*
+
+    /** delivery predictability initialization constant*/
+    public static final double P_INIT = 0.75;
+    /** delivery predictability transitivity scaling constant default value */
+    public static final double DEFAULT_BETA = 0.25;
+    /** delivery predictability aging constant */
+    public static final double DEFAULT_GAMMA = 0.98;
+    /**
+     * Number of seconds in time unit -setting id ({@value}).
+     * How many seconds one time unit is when calculating aging of
+     * delivery predictions. Should be tweaked for the scenario.*/
+    public static final String SECONDS_IN_UNIT_S ="secondsInTimeUnit";
+    /**
+     * Transitivity scaling constant (beta) -setting id ({@value}).
+     * Default value for setting is {@link #DEFAULT_BETA}.
+     */
+    public static final String BETA_S = "beta_s";
+    /**
+     * Predictability aging constant (gamma) -setting id ({@value}).
+     * Default value for setting is {@link #DEFAULT_GAMMA}.
+     */
+    public static final String GAMMA_S = "gamma_s";
+    /** the value of nrof seconds in time unit -setting */
+    private int secondsInTimeUnit;
+    /** value of beta setting */
+    private double beta_s;
+    /** value of gamma setting */
+    private double gamma_s;
+    /** delivery predictabilities */
+    private Map<DTNHost, Double> preds;
+    /** last delivery predictability update (sim)time */
+    private double lastAgeUpdate;
+
 	public static final String NROF_COPIES = "nrofCopies";
-	*//** identifier for the binary-mode setting ({@value})*//*
-	public static final String BINARY_MODE = "binaryMode";*/
+	//** identifier for the binary-mode setting ({@value})*//*
+	//public static final String BINARY_MODE = "binaryMode";*/
     /**
      * identifier for the q-mode setting ({@value})
      */
-    public static final String Q_MODE = "qMode";
+    //public static final String Q_MODE = "qMode";
     /**
      * Q-LearningSprayAndWait router's settings name space ({@value})
      */
-    public static final String Q_LEARNINGSPRAYANDWAIT_NS = "Q-LearningSprayAndWaitRouter";
+    public static final String Q_LEARNINGSPRAYANDWAIT_NS = "QLearningSprayAndWaitRouter";
     /**
      * Message property key
      */
@@ -43,10 +75,10 @@ public class MyRouter extends ActiveRouter {
     public int nodeCount = 0;
     public double Popularity;
     public static final String THRESHOLD = "threshold";
-    public Set<DTNHost> ENS = null;
+    public HashSet<DTNHost> ENS = new HashSet<>();
 
 
-    private List<DTNHost> actions;
+    private List<DTNHost> actions = new ArrayList<DTNHost>();
     public static final String NR_OF_INTERFACES = "nrOfInterface";
     public static final String ALPHA = "alpha";
     public static final String LEARNING_RATE = "learningRate";
@@ -60,22 +92,25 @@ public class MyRouter extends ActiveRouter {
     public int nrOfInterfaces;
     public int nrOfHosts;
     public double reward;
+    public int nrofCopies;
+
+    public HashSet<DTNHost> destinations = new HashSet<>();
 
     public List<DTNHost> getActions() {
         return actions;
     }
 
     public List<DTNHost> states = new ArrayList();
-    private HashMap<Pair<DTNHost, DTNHost>, Double> Qtable;
+    private HashMap<Pair<DTNHost, DTNHost>, Double> Qtable = new HashMap<Pair<DTNHost, DTNHost>, Double>();
 
     /**
      * Constructor
      * @param s
      */
-    public MyRouter(Settings s) {
+    public QLearningSprayAndWaitRouter(Settings s) {
         super(s);
         Settings snwSettings = new Settings(Q_LEARNINGSPRAYANDWAIT_NS);
-        int numOfActions = Integer.parseInt(NR_OF_INTERFACES);
+        //int numOfActions = Integer.parseInt(NR_OF_INTERFACES);
         actions = new ArrayList<DTNHost>();
         actions.add(getHost());
         this.learningRate = snwSettings.getDouble(LEARNING_RATE, 0.1);
@@ -85,7 +120,26 @@ public class MyRouter extends ActiveRouter {
         this.nrOfInterfaces = snwSettings.getInt(NR_OF_INTERFACES, 4);
         this.nrOfHosts = snwSettings.getInt(NROF_HOSTS, 200);
         this.beta = snwSettings.getDouble(BETA, 0.5);
-        Qtable = new HashMap<>();
+        this.nrofCopies = snwSettings.getInt(NROF_COPIES);
+        secondsInTimeUnit = snwSettings.getInt(SECONDS_IN_UNIT_S);
+        if (snwSettings.contains(BETA_S)) {
+            beta_s = snwSettings.getDouble(BETA_S);
+        }
+        else {
+            beta_s = DEFAULT_BETA;
+        }
+
+        if (snwSettings.contains(GAMMA_S)) {
+            gamma_s = snwSettings.getDouble(GAMMA_S);
+        }
+        else {
+            gamma_s = DEFAULT_GAMMA;
+        }
+        DTNHost self = getHost();
+        this.ENS.add(self);
+
+        initPreds();
+        //Qtable = new HashMap<>();
 
     }
 
@@ -95,13 +149,92 @@ public class MyRouter extends ActiveRouter {
      *
      * @param r The router prototype where setting values are copied from
      */
-    protected MyRouter(MyRouter r) {
+    protected QLearningSprayAndWaitRouter(QLearningSprayAndWaitRouter r) {
         super(r);
+        actions = new ArrayList<DTNHost>();
+        actions.add(getHost());
+        this.learningRate = r.learningRate;
+        this.gamma = r.gamma;
+        this.epsilon = r.epsilon;
+        this.threshold = r.threshold;
+        this.nrOfInterfaces = r.nrOfInterfaces;
+        this.nrOfHosts = r.nrOfHosts;
+        this.beta = r.beta;
+        this.ENS = r.ENS;
+        this.secondsInTimeUnit = r.secondsInTimeUnit;
+        this.beta_s = r.beta_s;
+        this.gamma_s = r.gamma_s;
 
+        initPreds();
 
         //this.initialNrofCopies = r.initialNrofCopies;
         //this.isBinary = r.isBinary;
     }
+
+    /**
+     * Initializes predictability hash
+     */
+    private void initPreds() {
+        this.preds = new HashMap<DTNHost, Double>();
+    }
+
+    private void updateDeliveryPredFor(DTNHost host) {
+        double oldValue = getPredFor(host);
+        double newValue = oldValue + (1 - oldValue) * P_INIT;
+        preds.put(host, newValue);
+    }
+
+    public double getPredFor(DTNHost host) {
+        ageDeliveryPreds(); // make sure preds are updated before getting
+        if (preds.containsKey(host)) {
+            return preds.get(host);
+        }
+        else {
+            return 0;
+        }
+    }
+
+    private Map<DTNHost, Double> getDeliveryPreds() {
+        ageDeliveryPreds(); // make sure the aging is done
+        return this.preds;
+    }
+    private void updateTransitivePreds(DTNHost host) {
+        MessageRouter otherRouter = host.getRouter();
+        assert otherRouter instanceof QLearningSprayAndWaitRouter : "PRoPHET only works " +
+                " with other routers of same type";
+
+        double pForHost = getPredFor(host); // P(a,b)
+        Map<DTNHost, Double> othersPreds =
+                ((QLearningSprayAndWaitRouter)otherRouter).getDeliveryPreds();
+
+        for (Map.Entry<DTNHost, Double> e : othersPreds.entrySet()) {
+            if (e.getKey() == getHost()) {
+                continue; // don't add yourself
+            }
+
+            double pOld = getPredFor(e.getKey()); // P(a,c)_old
+            double pNew = pOld + ( 1 - pOld) * pForHost * e.getValue() * beta;
+            preds.put(e.getKey(), pNew);
+        }
+    }
+
+    private void ageDeliveryPreds() {
+        double timeDiff = (SimClock.getTime() - this.lastAgeUpdate) /
+                secondsInTimeUnit;
+
+        if (timeDiff == 0) {
+            return;
+        }
+
+        double mult = Math.pow(gamma, timeDiff);
+        for (Map.Entry<DTNHost, Double> e : preds.entrySet()) {
+            e.setValue(e.getValue()*mult);
+        }
+
+        this.lastAgeUpdate = SimClock.getTime();
+    }
+
+
 
     public Connection chooseAction(DTNHost dest) {
         Collection<Message> msgCollection = getMessageCollection();
@@ -149,6 +282,9 @@ public class MyRouter extends ActiveRouter {
             states.add(state);
             for (DTNHost action :
                     actions) {
+                if (action == null){
+                    continue;
+                }
                 Pair<DTNHost, DTNHost> Qkey = new Pair<>(state, action);
                 Qtable.put(Qkey, 0.0);
             }
@@ -157,17 +293,17 @@ public class MyRouter extends ActiveRouter {
 
     public void updateStates(){
         Collection<Message> msgCollection = getMessageCollection();
-        Set<DTNHost> destSet = new TreeSet<>();
+        Set<DTNHost> destSet = new HashSet<>();
         for (Message m : msgCollection) {
             destSet.add(m.getTo());
             if (!states.contains(m.getTo())){
                 states.add(m.getTo());
             }
         }
-        for (DTNHost state:
-             states) {
-            if (!destSet.contains(state)){
-                states.remove(state);
+        Iterator<DTNHost> it = states.iterator();
+        while(it.hasNext()){
+            if (!destSet.contains(it.next())){
+                it.remove();
             }
         }
     }
@@ -186,7 +322,7 @@ public class MyRouter extends ActiveRouter {
 
         double qPredict = Qtable.get(Qkey);
         double qTarget = reward + gamma * maxQ;
-        double qValue = qPredict + learningRate * (qTarget - qPredict);
+        double qValue = learningRate*qTarget-qPredict;
         Qtable.put(new Pair<>(state, action), qValue);
     }
 
@@ -199,6 +335,15 @@ public class MyRouter extends ActiveRouter {
 
     public double getActivity() {
         return activity;
+    }
+
+    public void updateActions(Connection con){
+        if (con.isUp()){
+            actions.add(con.getOtherNode(getHost()));
+        }else {
+            actions.remove(con.getOtherNode(getHost()));
+        }
+
     }
 
     public HashMap<Pair<DTNHost, DTNHost>, Double> getQ_table() {
@@ -217,15 +362,23 @@ public class MyRouter extends ActiveRouter {
      */
     public void exchangeENS(Connection con) {
         DTNHost other = con.getOtherNode(getHost());
-        MyRouter r = (MyRouter) other.getRouter();
+        QLearningSprayAndWaitRouter r = (QLearningSprayAndWaitRouter) other.getRouter();
         this.ENS.addAll(r.ENS);
     }
 
+    public void removeReplicas(List list){
+        HashSet<DTNHost> hashSet = new HashSet<>(list);
+    }
+
     public List<Double> getQValueFromOther(DTNHost other, DTNHost dest){
-        MyRouter router = (MyRouter) other.getRouter();
+        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
         HashMap<Pair<DTNHost, DTNHost>, Double> otherQtable = router.getQ_table();
         List<DTNHost> otherActions = router.getActions();
         List<Double> qValueList = new ArrayList<>();
+        if (otherActions.size()==0||otherQtable.size()==0){
+            qValueList.add(0.0);
+            return qValueList;
+        }
         for (DTNHost action:
              otherActions) {
             qValueList.add(otherQtable.get(new Pair<>(dest, action)));
@@ -272,19 +425,63 @@ public class MyRouter extends ActiveRouter {
         this.Popularity = (1 - alpha) * this.Popularity + alpha * this.Popularity;
     }
 
-    public void setReward(Connection con, Message m) {
-        MyRouter otherRouter = (MyRouter) con.getOtherNode(getHost()).getRouter();
-        reward = otherRouter.ENS.contains(m.getTo()) ? 1 : -1;
+    public void setReward(DTNHost other, DTNHost d) {
+        QLearningSprayAndWaitRouter otherRouter = (QLearningSprayAndWaitRouter) other.getRouter();
+
+
+            if (otherRouter.ENS.contains(d)){
+                reward = 1;
+            } else if (otherRouter.actions.contains(d)) {
+                reward = 100;
+            } else {
+                reward = -1;
+            }
+
+
     }
 
     public void updateQValueWhenDisconnected(Connection con){
         DTNHost other = con.getOtherNode(getHost());
+        System.out.println(con);
         for (DTNHost state:
              states) {
             Double qValue = Qtable.get(new Pair<>(state, other));
             qValue = qValue*beta;
             Qtable.put(new Pair<>(state, other), qValue);
         }
+    }
+
+    public void updateDestinationSet(DTNHost other){
+        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
+        this.destinations.addAll(router.destinations);
+    }
+
+    public void initializeQtable(){
+        if (destinations.size()==0)
+            return;
+        for (DTNHost d:
+             destinations) {
+            for (DTNHost e:
+                 ENS) {
+                if (!Qtable.containsKey(new Pair<>(d,e))){
+                    Qtable.put(new Pair<>(d, e), 0.0);
+                }
+            }
+        }
+    }
+
+    public void updateQtableWhenConnected(DTNHost other){
+        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
+        Pair<DTNHost, DTNHost> Qkey;
+        for (DTNHost d:
+             destinations) {
+            Qkey = new Pair<>(d,other);
+            if (Qtable.containsKey(Qkey)){
+                setReward(other, d);
+                learn(d, other, reward);
+            }
+        }
+
     }
 
 /*    private class UpdateByTimer extends TimerTask{
@@ -299,19 +496,36 @@ public class MyRouter extends ActiveRouter {
     public void changedConnection(Connection con) {
         super.changedConnection(con);
 
-        DTNHost other = con.getOtherNode(getHost());
-        updateStates();
-        List<Message> msgList = sortByQueueMode((List) getMessageCollection());
+
+
+        List<Message> msgList = new ArrayList<Message>(getMessageCollection());
+        msgList = sortByQueueMode(msgList);
 
         if (con.isUp()) {
-            updateENS(con);
-            exchangeENS(con);
+            DTNHost other = con.getOtherNode(getHost());
+            updateDeliveryPredFor(other);
+            updateTransitivePreds(other);
+            updateDestinationSet(other);
+            updateActions(con);
+
+
+            if (!ENS.contains(other))
+                updateENS(con);
+            //exchangeENS(con);
+
+            initializeQtable();
             this.nodeCount++;
-            setReward(con, msgList.get(0));
-            learn(msgList.get(0).getTo(), other, reward);
+
+            //setReward(other, );
+            updateQtableWhenConnected(other);
+            /*else {
+                learn(getHost(),other,reward);
+            }*/
+
         }
 
         if (!con.isUp()){
+            updateActions(con);
             new Timer().schedule(new TimerTask() {
                 @Override
                 public void run() {
@@ -361,8 +575,9 @@ public class MyRouter extends ActiveRouter {
         makeRoomForNewMessage(msg.getSize());
 
         msg.setTtl(this.msgTtl);
-        msg.addProperty(MSG_COUNT_PROPERTY, calculateNROfCopies(msg));
+        msg.addProperty(MSG_COUNT_PROPERTY, new Integer(nrofCopies));
         addToMessages(msg, true);
+        updateStates();
         return true;
     }
 
@@ -438,7 +653,7 @@ public class MyRouter extends ActiveRouter {
     }
 
     @Override
-    public MyRouter replicate() {
-        return new MyRouter(this);
+    public QLearningSprayAndWaitRouter replicate() {
+        return new QLearningSprayAndWaitRouter(this);
     }
 }
