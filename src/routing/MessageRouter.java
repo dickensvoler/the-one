@@ -52,10 +52,14 @@ public abstract class MessageRouter {
 	/** Setting value for FIFO queue mode */
 	public static final int Q_MODE_FIFO = 2;
 
+	public static final int Q_MODE_TTL_HOPS = 3;
+
 	/** Setting string for random queue mode */
 	public static final String STR_Q_MODE_RANDOM = "RANDOM";
 	/** Setting string for FIFO queue mode */
 	public static final String STR_Q_MODE_FIFO = "FIFO";
+
+    public static final String STR_Q_MODE_TTL_HOPS = "TH";
 
 	/* Return values when asking to start a transmission:
 	 * RCV_OK (0) means that the host accepts the message and transfer started,
@@ -122,10 +126,10 @@ public abstract class MessageRouter {
 
 		if (s.contains(MSG_TTL_S)) {
 			this.msgTtl = s.getInt(MSG_TTL_S);
-			
+
 			if (this.msgTtl > MAX_TTL_VALUE){
-				throw new SettingsError("Invalid value for " + 
-						s.getFullPropertyName(MSG_TTL_S) + 
+				throw new SettingsError("Invalid value for " +
+						s.getFullPropertyName(MSG_TTL_S) +
 								". Max value is limited to "+MAX_TTL_VALUE);
 			}
 		}
@@ -138,7 +142,9 @@ public abstract class MessageRouter {
 				this.sendQueueMode = Q_MODE_FIFO;
 			} else if (mode.trim().toUpperCase().equals(STR_Q_MODE_RANDOM)){
 				this.sendQueueMode = Q_MODE_RANDOM;
-			} else {
+			} else if (mode.trim().toUpperCase().equals(STR_Q_MODE_TTL_HOPS)){
+                this.sendQueueMode = Q_MODE_RANDOM;
+            } else {
 				this.sendQueueMode = s.getInt(SEND_QUEUE_MODE_S);
 				if (sendQueueMode < 1 || sendQueueMode > 2) {
 					throw new SettingsError("Invalid value for " +
@@ -556,6 +562,39 @@ public abstract class MessageRouter {
 				}
 			});
 			break;
+			case Q_MODE_TTL_HOPS:
+				Collections.sort(list, new Comparator(){
+
+					@Override
+					public int compare(Object o1, Object o2) {
+						double diff1, diff2;
+						Message m1,m2;
+
+						if (o1 instanceof Tuple) {
+							m1 = ((Tuple<Message, Connection>)o1).getKey();
+							m2 = ((Tuple<Message, Connection>)o2).getKey();
+						}
+						else if (o1 instanceof Message) {
+							m1 = (Message)o1;
+							m2 = (Message)o2;
+						}
+						else {
+							throw new SimError("Invalid type of objects in " +
+									"the list");
+						}
+
+						diff1 = m1.getTtl()-m2.getTtl();
+						diff2 = m1.getHopCount()-m2.getHopCount();
+                        if (diff1 == 0 && diff2 == 0) {
+                            return 0;
+                        } else if (diff1 == 0) {
+                            return (diff2 < 0 ? 1 : -1);
+
+                        } else {
+                            return (diff1 < 0 ? -1 : 1);
+                        }
+                    }
+				});
 		/* add more queue modes here */
 		default:
 			throw new SimError("Unknown queue mode " + sendQueueMode);

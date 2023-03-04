@@ -50,7 +50,11 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     /** last delivery predictability update (sim)time */
     private double lastAgeUpdate;
 
-	public static final String NROF_COPIES = "nrofCopies";
+    private double lastAgeUpdateQ;
+
+
+
+    public static final String NROF_COPIES = "nrofCopies";
 	//** identifier for the binary-mode setting ({@value})*//*
 	//public static final String BINARY_MODE = "binaryMode";*/
     /**
@@ -170,20 +174,35 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         //this.initialNrofCopies = r.initialNrofCopies;
         //this.isBinary = r.isBinary;
     }
+    public double getLastAgeUpdateQ() {
+        return lastAgeUpdateQ;
+    }
 
+    public void setLastAgeUpdateQ(double lastAgeUpdateQ) {
+        this.lastAgeUpdateQ = lastAgeUpdateQ;
+    }
     /**
      * Initializes predictability hash
      */
     private void initPreds() {
         this.preds = new HashMap<DTNHost, Double>();
     }
-
+    /**
+     * Updates delivery predictions for a host.
+     * <CODE>P(a,b) = P(a,b)_old + (1 - P(a,b)_old) * P_INIT</CODE>
+     * @param host The host we just met
+     */
     private void updateDeliveryPredFor(DTNHost host) {
         double oldValue = getPredFor(host);
         double newValue = oldValue + (1 - oldValue) * P_INIT;
         preds.put(host, newValue);
     }
-
+    /**
+     * Returns the current prediction (P) value for a host or 0 if entry for
+     * the host doesn't exist.
+     * @param host The host to look the P for
+     * @return the current P value
+     */
     public double getPredFor(DTNHost host) {
         ageDeliveryPreds(); // make sure preds are updated before getting
         if (preds.containsKey(host)) {
@@ -193,11 +212,20 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             return 0;
         }
     }
-
+    /**
+     * Returns a map of this router's delivery predictions
+     * @return a map of this router's delivery predictions
+     */
     private Map<DTNHost, Double> getDeliveryPreds() {
         ageDeliveryPreds(); // make sure the aging is done
         return this.preds;
     }
+    /**
+     * Updates transitive (A->B->C) delivery predictions.
+     * <CODE>P(a,c) = P(a,c)_old + (1 - P(a,c)_old) * P(a,b) * P(b,c) * BETA
+     * </CODE>
+     * @param host The B host who we just met
+     */
     private void updateTransitivePreds(DTNHost host) {
         MessageRouter otherRouter = host.getRouter();
         assert otherRouter instanceof QLearningSprayAndWaitRouter : "PRoPHET only works " +
@@ -213,11 +241,16 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             }
 
             double pOld = getPredFor(e.getKey()); // P(a,c)_old
-            double pNew = pOld + ( 1 - pOld) * pForHost * e.getValue() * beta;
+            double pNew = pOld + ( 1 - pOld) * pForHost * e.getValue() * beta_s;
             preds.put(e.getKey(), pNew);
         }
     }
-
+    /**
+     * Ages all entries in the delivery predictions.
+     * <CODE>P(a,b) = P(a,b)_old * (GAMMA ^ k)</CODE>, where k is number of
+     * time units that have elapsed since the last time the metric was aged.
+     * @see #SECONDS_IN_UNIT_S
+     */
     private void ageDeliveryPreds() {
         double timeDiff = (SimClock.getTime() - this.lastAgeUpdate) /
                 secondsInTimeUnit;
@@ -226,7 +259,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             return;
         }
 
-        double mult = Math.pow(gamma, timeDiff);
+        double mult = Math.pow(gamma_s, timeDiff);
         for (Map.Entry<DTNHost, Double> e : preds.entrySet()) {
             e.setValue(e.getValue()*mult);
         }
@@ -234,8 +267,25 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.lastAgeUpdate = SimClock.getTime();
     }
 
+    private void ageQValue(Pair<DTNHost, DTNHost> key){
+        double timeDiff = (SimClock.getTime()-this.lastAgeUpdateQ) / secondsInTimeUnit;
+
+        if (timeDiff == 0) {
+            return;
+        }
+
+        double mult = Math.pow(beta, timeDiff);
+        Qtable.put(key, Qtable.get(key)*mult);
+
+        this.lastAgeUpdateQ = SimClock.getTime();
+    }
 
 
+    /**
+     * Select an action depends on the Q-value or randomly
+     * @param dest destination of the message
+     * @return selected connection
+     */
     public Connection chooseAction(DTNHost dest) {
         Collection<Message> msgCollection = getMessageCollection();
         List<Connection> cons = getConnections();
@@ -277,6 +327,10 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         return selectedConnection;
     }
 
+    /**
+     * check if the destination(state) is in the list of states
+     * @param state destination of message
+     */
     public void checkStateExist(DTNHost state) {
         if (!states.contains(state)) {
             states.add(state);
@@ -291,6 +345,9 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
     }
 
+    /**
+     * update states when new message created
+     */
     public void updateStates(){
         Collection<Message> msgCollection = getMessageCollection();
         Set<DTNHost> destSet = new HashSet<>();
@@ -308,6 +365,12 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
     }
 
+    /**
+     * update Q-value when state changed or connection changed
+     * @param state
+     * @param action
+     * @param reward
+     */
     public void learn(DTNHost state, DTNHost action, double reward) {
         checkStateExist(state);
         Pair<DTNHost, DTNHost> Qkey = new Pair<DTNHost, DTNHost>(state, action);
@@ -318,11 +381,11 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             if (q > maxQ)
                 maxQ = q;
         }
-
+        Double prophetProbability = getPredFor(action);
 
         double qPredict = Qtable.get(Qkey);
-        double qTarget = reward + gamma * maxQ;
-        double qValue = learningRate*qTarget-qPredict;
+        double qTarget = reward + gamma * prophetProbability * maxQ;
+        double qValue = learningRate*qTarget-(1-learningRate)*qPredict;
         Qtable.put(new Pair<>(state, action), qValue);
     }
 
@@ -478,6 +541,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             Qkey = new Pair<>(d,other);
             if (Qtable.containsKey(Qkey)){
                 setReward(other, d);
+                ageQValue(Qkey);
                 learn(d, other, reward);
             }
         }
@@ -526,16 +590,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
         if (!con.isUp()){
             updateActions(con);
-            new Timer().schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    try {
-                        updateQValueWhenDisconnected(con);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
-            }, 0,600*1000);
+            //ageQValue();
         }
     }
 
