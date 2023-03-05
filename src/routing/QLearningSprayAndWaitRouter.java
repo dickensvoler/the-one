@@ -80,7 +80,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public double Popularity;
     public static final String THRESHOLD = "threshold";
     public HashSet<DTNHost> ENS = new HashSet<>();
-    public HashSet<DTNHost> DENS = new HashSet<>();
+    public HashSet<DTNHost> RENS = new HashSet<>();
 
 
     private List<DTNHost> actions = new ArrayList<DTNHost>();
@@ -90,6 +90,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public static final String GAMMA = "gamma";
     public static final String EPSILON = "epsilon";
     public static final String REWARD_TUNE_PARAMETER = "rewardTuneParameter";
+    public double alpha;
     public double beta;
     public double learningRate;
     public double gamma;
@@ -131,6 +132,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.beta = snwSettings.getDouble(BETA, 0.5);
         this.nrofCopies = snwSettings.getInt(NROF_COPIES);
         this.rewardTune = snwSettings.getDouble(REWARD_TUNE_PARAMETER, 0.5);
+        this.alpha = snwSettings.getDouble(ALPHA, 0.5);
         secondsInTimeUnit = snwSettings.getInt(SECONDS_IN_UNIT_S);
         if (snwSettings.contains(BETA_S)) {
             beta_s = snwSettings.getDouble(BETA_S);
@@ -458,10 +460,21 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
      *
      * @param con
      */
-    public void exchangeENS(Connection con) {
+    public void exchangeRENS(Connection con) {
         DTNHost other = con.getOtherNode(getHost());
         QLearningSprayAndWaitRouter r = (QLearningSprayAndWaitRouter) other.getRouter();
-        this.ENS.addAll(r.ENS);
+        for (DTNHost encounter:
+             r.ENS) {
+            if (!ENS.contains(encounter)){
+                RENS.add(encounter);
+            }
+        }
+        for (DTNHost encounter :
+                r.RENS) {
+            if (!ENS.contains(encounter)){
+                RENS.add(encounter);
+            }
+        }
     }
 
     public void removeReplicas(List list){
@@ -521,7 +534,6 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
 
     public void updatePopularity() {
-        double alpha = Double.parseDouble(this.ALPHA);
         double p = Popularity;
         setPopularity();
         this.Popularity = (1 - alpha) * this.Popularity + alpha * p;
@@ -613,6 +625,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             updateDestinationSet(other);
             updateActions(con);
 
+            exchangeRENS(con);
 
             if (!ENS.contains(other))
                 updateENS(con);
