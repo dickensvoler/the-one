@@ -80,6 +80,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public double Popularity;
     public static final String THRESHOLD = "threshold";
     public HashSet<DTNHost> ENS = new HashSet<>();
+    public HashSet<DTNHost> DENS = new HashSet<>();
 
 
     private List<DTNHost> actions = new ArrayList<DTNHost>();
@@ -88,6 +89,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public static final String LEARNING_RATE = "learningRate";
     public static final String GAMMA = "gamma";
     public static final String EPSILON = "epsilon";
+    public static final String REWARD_TUNE_PARAMETER = "rewardTuneParameter";
     public double beta;
     public double learningRate;
     public double gamma;
@@ -97,8 +99,11 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public int nrOfHosts;
     public double reward;
     public int nrofCopies;
+    private int nodeCountIn200;
+    private double rewardTune;
 
     public HashSet<DTNHost> destinations = new HashSet<>();
+
 
     public List<DTNHost> getActions() {
         return actions;
@@ -120,11 +125,12 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.learningRate = snwSettings.getDouble(LEARNING_RATE, 0.1);
         this.gamma = snwSettings.getDouble(GAMMA, 0.9);
         this.epsilon = snwSettings.getDouble(EPSILON, 0.8);
-        this.threshold = snwSettings.getDouble(THRESHOLD, 0.5);
+        this.threshold = snwSettings.getDouble(THRESHOLD, 50);
         this.nrOfInterfaces = snwSettings.getInt(NR_OF_INTERFACES, 4);
         this.nrOfHosts = snwSettings.getInt(NROF_HOSTS, 200);
         this.beta = snwSettings.getDouble(BETA, 0.5);
         this.nrofCopies = snwSettings.getInt(NROF_COPIES);
+        this.rewardTune = snwSettings.getDouble(REWARD_TUNE_PARAMETER, 0.5);
         secondsInTimeUnit = snwSettings.getInt(SECONDS_IN_UNIT_S);
         if (snwSettings.contains(BETA_S)) {
             beta_s = snwSettings.getDouble(BETA_S);
@@ -168,6 +174,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.secondsInTimeUnit = r.secondsInTimeUnit;
         this.beta_s = r.beta_s;
         this.gamma_s = r.gamma_s;
+        this.rewardTune = r.rewardTune;
 
         initPreds();
 
@@ -181,6 +188,15 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public void setLastAgeUpdateQ(double lastAgeUpdateQ) {
         this.lastAgeUpdateQ = lastAgeUpdateQ;
     }
+
+    public int getNodeCountIn200() {
+        return nodeCountIn200;
+    }
+
+    public void setNodeCountIn200(int nodeCountIn200) {
+        this.nodeCountIn200 = nodeCountIn200;
+    }
+
     /**
      * Initializes predictability hash
      */
@@ -392,9 +408,27 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     /**
      * calculate activity of node i
      */
-    public void setActivity() {
-        this.activity = nodeCount / nrOfHosts;
+    public void updateActivity() {
+        this.activity = nodeCount / threshold;
+        nodeCount = 0;
     }
+
+    public void runTask() {
+        Timer timer = new Timer();
+        MyTask task = new MyTask();
+        //run every 200 seconds
+        timer.schedule(task, 200000, 200000);
+    }
+    class MyTask extends TimerTask{
+
+        //在run方法中的语句就是定时任务执行时运行的语句。
+        public void run() {
+            updateActivity();
+        }
+    }
+
+
+
 
     public double getActivity() {
         return activity;
@@ -416,6 +450,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
     public void updateENS(Connection con){
         ENS.add(con.getOtherNode(getHost()));
+        updatePopularity();
     }
 
     /**
@@ -483,9 +518,13 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.Popularity = this.ENS.size() / threshold;
     }
 
+
+
     public void updatePopularity() {
         double alpha = Double.parseDouble(this.ALPHA);
-        this.Popularity = (1 - alpha) * this.Popularity + alpha * this.Popularity;
+        double p = Popularity;
+        setPopularity();
+        this.Popularity = (1 - alpha) * this.Popularity + alpha * p;
     }
 
     public void setReward(DTNHost other, DTNHost d) {
@@ -493,9 +532,11 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
 
             if (otherRouter.ENS.contains(d)){
-                reward = 1;
+                reward = 1 + rewardTune * otherRouter.activity +
+                        (1 - rewardTune) * otherRouter.Popularity;
             } else if (otherRouter.actions.contains(d)) {
-                reward = 100;
+                reward = 10 + rewardTune * otherRouter.activity +
+                        (1 - rewardTune) * otherRouter.Popularity;
             } else {
                 reward = -1;
             }
@@ -639,6 +680,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     @Override
     public void update() {
         super.update();
+        runTask();
         if (!canStartTransfer() || isTransferring()) {
             return; // nothing to transfer or is currently transferring
         }
