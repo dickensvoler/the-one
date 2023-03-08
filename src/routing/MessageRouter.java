@@ -52,14 +52,14 @@ public abstract class MessageRouter {
 	/** Setting value for FIFO queue mode */
 	public static final int Q_MODE_FIFO = 2;
 
-	public static final int Q_MODE_TTL_HOPS = 3;
+	//public static final int Q_MODE_TTL_HOPS = 3;
 
 	/** Setting string for random queue mode */
 	public static final String STR_Q_MODE_RANDOM = "RANDOM";
 	/** Setting string for FIFO queue mode */
 	public static final String STR_Q_MODE_FIFO = "FIFO";
 
-    public static final String STR_Q_MODE_TTL_HOPS = "TH";
+    //public static final String STR_Q_MODE_TTL_HOPS = "TH";
 
 	/* Return values when asking to start a transmission:
 	 * RCV_OK (0) means that the host accepts the message and transfer started,
@@ -142,9 +142,9 @@ public abstract class MessageRouter {
 				this.sendQueueMode = Q_MODE_FIFO;
 			} else if (mode.trim().toUpperCase().equals(STR_Q_MODE_RANDOM)){
 				this.sendQueueMode = Q_MODE_RANDOM;
-			} else if (mode.trim().toUpperCase().equals(STR_Q_MODE_TTL_HOPS)){
-                this.sendQueueMode = Q_MODE_RANDOM;
-            } else {
+			} /*else if (mode.trim().toUpperCase().equals(STR_Q_MODE_TTL_HOPS)){
+                this.sendQueueMode = Q_MODE_TTL_HOPS;
+            }*/ else {
 				this.sendQueueMode = s.getInt(SEND_QUEUE_MODE_S);
 				if (sendQueueMode < 1 || sendQueueMode > 2) {
 					throw new SettingsError("Invalid value for " +
@@ -562,7 +562,7 @@ public abstract class MessageRouter {
 				}
 			});
 			break;
-			case Q_MODE_TTL_HOPS:
+/*			case Q_MODE_TTL_HOPS:
 				Collections.sort(list, new Comparator(){
 
 					@Override
@@ -594,7 +594,7 @@ public abstract class MessageRouter {
                             return (diff1 < 0 ? -1 : 1);
                         }
                     }
-				});
+				});*/
 		/* add more queue modes here */
 		default:
 			throw new SimError("Unknown queue mode " + sendQueueMode);

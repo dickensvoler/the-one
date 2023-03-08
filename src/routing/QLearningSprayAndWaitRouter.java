@@ -6,7 +6,10 @@ package routing;
 
 import core.*;
 import javafx.util.Pair;
+import org.apache.commons.collections.CollectionUtils;
+import util.Tuple;
 
+import javax.swing.text.html.HTMLDocument;
 import java.util.*;
 
 /**
@@ -105,7 +108,10 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     private int nodeCountIn200;
     private double rewardTune;
 
+    public int DeliveredMessages = 0;
+
     public HashSet<DTNHost> destinations = new HashSet<>();
+    private Double Q_THRESHOLD = 0.1;
 
 
     public Set<DTNHost> getActions() {
@@ -117,7 +123,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         return actionList.get(index);
     }
 
-    public List<DTNHost> states = new ArrayList();
+    //public List<DTNHost> states = new ArrayList();
     private HashMap<Pair<DTNHost, DTNHost>, Double> Qtable = new HashMap<Pair<DTNHost, DTNHost>, Double>();
 
     /**
@@ -136,7 +142,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.epsilon = snwSettings.getDouble(EPSILON, 0.8);
         this.threshold = snwSettings.getDouble(THRESHOLD, 50);
         this.nrOfInterfaces = snwSettings.getInt(NR_OF_INTERFACES, 4);
-        this.nrOfHosts = snwSettings.getInt(NROF_HOSTS, 200);
+        this.nrOfHosts = snwSettings.getInt(NROF_HOSTS,100);
         this.beta = snwSettings.getDouble(BETA, 0.5);
         this.nrofCopies = snwSettings.getInt(NROF_COPIES, 6);
         this.rewardTune = snwSettings.getDouble(REWARD_TUNE_PARAMETER, 0.5);
@@ -296,7 +302,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         this.lastAgeUpdate = SimClock.getTime();
     }
 
-    private void ageQValue(Pair<DTNHost, DTNHost> key){
+    private void ageQValue(DTNHost other){
         double timeDiff = (SimClock.getTime()-this.lastAgeUpdateQ) / secondsInTimeUnit;
 
         if (timeDiff == 0) {
@@ -304,7 +310,14 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
 
         double mult = Math.pow(beta, timeDiff);
-        Qtable.put(key, Qtable.get(key)*mult);
+        for (Map.Entry<Pair<DTNHost,DTNHost>,Double> e: Qtable.entrySet()
+             ) {
+            if (actions.contains(e.getKey().getValue())&&e.getKey().getValue()!=other) {
+                continue;
+            }else{
+                e.setValue(e.getValue()*mult);}
+        }
+
 
         this.lastAgeUpdateQ = SimClock.getTime();
     }
@@ -316,8 +329,8 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         if (timeDiff <= 200) {
             return;
         }else {
-           activity = nodeCount / threshold;
-           nodeCount = 0;
+           activity = nodeCountIn200 / threshold;
+           nodeCountIn200 = 0;
         }
 
         this.lastAgeUpdateA = SimClock.getTime();
@@ -330,8 +343,15 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
      * @return selected connection
      */
     public Connection chooseAction(DTNHost dest) {
+        if (actions.contains(dest)) {
+
+
+
+            return getConnectionByOtherHost(dest);
+        }
         Collection<Message> msgCollection = getMessageCollection();
-        List<Connection> cons = getConnections();
+        List<Connection> connections = getConnections();
+        Set<Connection> cons = new HashSet<>(connections);
         DTNHost action = null;
         List<Pair<DTNHost, DTNHost>> keySet = new ArrayList<>();
         Map<DTNHost, Connection> actionConnectionMap = new HashMap<>();
@@ -340,16 +360,13 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             actions.add(con.getOtherNode(getHost()));
             actionConnectionMap.put(con.getOtherNode(getHost()), con);
         }
-        for (Message m :
-                msgCollection) {
-            DTNHost state = m.getTo();
-            checkStateExist(state);
-        }
+        checkQvalueStateExist();
 
         Connection selectedConnection = null;
-        if (Math.random() > epsilon) {
 
-            int index = (int) (Math.random() * actions.size());
+        if (Math.random() > epsilon) {
+            //double i = Math.random();
+            int index = (int) (Math.random() * (double) actions.size());
             action = getElementFromActions(index);
             selectedConnection = actionConnectionMap.get(action);
         } else {
@@ -357,6 +374,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
             for (DTNHost act :
                     actions) {
+                //learn(dest,act);
                 Pair<DTNHost, DTNHost> keyPair = new Pair<>(dest, act);
                 keySet.add(keyPair);
 
@@ -373,27 +391,50 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         return selectedConnection;
     }
 
+    private void updateQtable(DTNHost host) {
+
+        for (DTNHost d:
+             destinations) {
+            if (!Qtable.containsKey(new Pair<>(d, host))) {
+                Qtable.put(new Pair<>(d,host), 0.0);
+            }
+            double Q = Qtable.get(new Pair<>(d,host));
+            Q = Q+0.3*DeliveredMessages;
+            Qtable.put(new Pair<>(d,host), Q);
+        }
+
+    }
+
+    private Connection getConnectionByOtherHost(DTNHost dest) {
+        Set<Connection> connections = new HashSet<>(getConnections());
+        for (Connection con:
+             connections) {
+            if (con.getOtherNode(getHost()) == dest) {
+                return con;
+            }
+        }
+        return null;
+    }
+
     /**
      * check if the destination(state) is in the list of states
-     * @param state destination of message
      */
-    public void checkStateExist(DTNHost state) {
-        if (!states.contains(state)) {
-            states.add(state);
-            for (DTNHost action :
-                    actions) {
-                if (action == null){
-                    continue;
+    public void checkQvalueStateExist() {
+        for (DTNHost d:
+             destinations) {
+            for (DTNHost a:
+                 actions) {
+                if (!Qtable.containsKey(new Pair<>(d, a))) {
+                    Qtable.put(new Pair<>(d, a), 0.0);
                 }
-                Pair<DTNHost, DTNHost> Qkey = new Pair<>(state, action);
-                Qtable.put(Qkey, 0.0);
             }
         }
     }
 
-    /**
+
+/*    *//**
      * update states when new message created
-     */
+     *//*
     public void updateStates(){
         Collection<Message> msgCollection = getMessageCollection();
         Set<DTNHost> destSet = new HashSet<>();
@@ -409,7 +450,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
                 it.remove();
             }
         }
-    }
+    }*/
 
     /**
      * update Q-value when state changed or connection changed
@@ -418,7 +459,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
      *
      */
     public void learn(DTNHost state, DTNHost action) {
-        checkStateExist(state);
+        checkQvalueStateExist();
         Pair<DTNHost, DTNHost> Qkey = new Pair<DTNHost, DTNHost>(state, action);
         double maxQ = 0;
         List<Double> qValueList = getQValueFromOther(action, state);
@@ -429,9 +470,10 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
         Double prophetProbability = getPredFor(action);
 
+        setReward(action, state);
         double qPredict = Qtable.get(Qkey);
-        double qTarget = reward + gamma * prophetProbability * maxQ;
-        double qValue = learningRate*qTarget+(1-learningRate)*qPredict;
+        double qTarget = reward + gamma * prophetProbability * maxQ-qPredict;
+        double qValue = learningRate*qTarget+qPredict;
         Qtable.put(new Pair<>(state, action), qValue);
     }
 
@@ -439,8 +481,8 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
      * calculate activity of node i
      */
     public void updateActivity() {
-        this.activity = nodeCount / threshold;
-        nodeCount = 0;
+        this.activity = nodeCountIn200 / threshold;
+        nodeCountIn200 = 0;
     }
 
 /*    public void runTask() {
@@ -464,6 +506,10 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         return activity;
     }
 
+    /**
+     * update actions when connection changed
+     * @param con
+     */
     public void updateActions(Connection con){
         if (con.isUp()){
             actions.add(con.getOtherNode(getHost()));
@@ -505,11 +551,15 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
     }
 
-    public void removeReplicas(List list){
-        HashSet<DTNHost> hashSet = new HashSet<>(list);
-    }
+
 
     public List<Double> getQValueFromOther(DTNHost other, DTNHost dest){
+        List<Double> qValueList = new ArrayList<>();
+
+        if (other.equals(getHost())) {
+            qValueList.add(0.0);
+            return qValueList;
+        }
         QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
         HashMap<Pair<DTNHost, DTNHost>, Double> otherQtable = router.getQ_table();
 
@@ -517,7 +567,6 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         List<Connection> con = router.getConnections();
 
         Set<DTNHost> otherActions = router.actions;
-        List<Double> qValueList = new ArrayList<>();
         if (otherActions.size()==0||otherQtable.size()==0){
             qValueList.add(0.0);
             return qValueList;
@@ -540,7 +589,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
      * @return node density
      */
     public double calculateDensity() {
-        return (ENS.size()) / nrOfHosts;
+        return (double) ENS.size() / (double) nrOfHosts;
     }
 
     /**
@@ -552,15 +601,16 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     public int calculateNROfCopies(Message m) {
 
         List<Connection> curConnections = getConnections();
-        if (curConnections.contains(m.getTo())) {
+        Set<Connection> connections = new HashSet<>(curConnections);
+        if (connections.contains(m.getTo())) {
             //TODO:activate transfer function
             return 1;
         }
 
 
-        int maxL = nodeCount;
+        int maxL = 15;
         double density = calculateDensity();
-        double NROfCopies = maxL * density / 0.5;
+        double NROfCopies = maxL*density;
         return (int) NROfCopies;
     }
 
@@ -580,13 +630,13 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         QLearningSprayAndWaitRouter otherRouter = (QLearningSprayAndWaitRouter) other.getRouter();
 
 
-            if (otherRouter.ENS.contains(d)){
+            if (otherRouter.ENS.contains(d)&&!otherRouter.actions.contains(d)){
                 reward = 1 + rewardTune * otherRouter.activity +
                         (1 - rewardTune) * otherRouter.Popularity;
-            } else if (otherRouter.actions.contains(d)) {
+            } /*else if (otherRouter.actions.contains(d)) {
                 reward = 10 + rewardTune * otherRouter.activity +
                         (1 - rewardTune) * otherRouter.Popularity;
-            } else {
+            }*/ else {
                 reward = -1;
             }
 /*        if (otherRouter.ENS.contains(d)){
@@ -599,7 +649,7 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
     }
 
-    public void updateQValueWhenDisconnected(Connection con){
+/*    public void updateQValueWhenDisconnected(Connection con){
         DTNHost other = con.getOtherNode(getHost());
         System.out.println(con);
         for (DTNHost state:
@@ -608,30 +658,53 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
             qValue = qValue*beta;
             Qtable.put(new Pair<>(state, other), qValue);
         }
-    }
+    }*/
 
-    public void updateDestinationSet(DTNHost other){
-        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
-        this.destinations.addAll(router.destinations);
+    /**
+     * should be called when message transferred
+     */
+    public void updateDestinationSet(){
+        destinations.clear();
+        Collection<Message> msgs = getMessageCollection();
+        for (Message m :
+                msgs) {
+            destinations.add(m.getTo());
+        }
     }
 
     public void updateDestinationSetAfterNewMsgAdd(Message message) {
         destinations.add(message.getTo());
     }
 
+    /**
+     * initialize q-table when connection changed, put new item in q-table
+     * if not exist
+     */
     public void initializeQtable(){
         if (destinations.size()==0)
             return;
         for (DTNHost d:
              destinations) {
-            for (DTNHost e:
-                 ENS) {
-                if (!Qtable.containsKey(new Pair<>(d,e))){
-                    Qtable.put(new Pair<>(d, e), 0.0);
+            for (DTNHost a:
+                 actions) {
+                if (!Qtable.containsKey(new Pair<>(d,a))){
+                    Qtable.put(new Pair<>(d, a), 0.0);
                 }
             }
         }
     }
+
+    public void updateQtableTransferredDone(DTNHost other, Message m){
+        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
+        Pair<DTNHost, DTNHost> Qkey;
+        DTNHost d = m.getTo();
+            Qkey = new Pair<>(d,other);
+            if (Qtable.containsKey(Qkey)){
+                //setReward(other, d);
+
+                learn(d, other);
+            }
+        }
 
     public void updateQtableWhenConnected(DTNHost other){
         QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
@@ -640,21 +713,64 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
              destinations) {
             Qkey = new Pair<>(d,other);
             if (Qtable.containsKey(Qkey)){
-                setReward(other, d);
-                ageQValue(Qkey);
+                //setReward(other, d);
+
                 learn(d, other);
             }
         }
 
     }
 
-/*    private class UpdateByTimer extends TimerTask{
-        @Override
-        public void run(){
-            updateQValueWhenDisconnected(con);
+    public void removeZeroFromQtable() {
+        for (Map.Entry<Pair<DTNHost,DTNHost>,Double> e: Qtable.entrySet()
+             ) {
+            if (e.getValue() < Q_THRESHOLD&&e.getValue()>-0.1) {
+                Qtable.remove(e);
+            }
         }
-    }*/
+    }
 
+    public int setNewMsgNrofCopies(DTNHost host) {
+        //TODO:calculate the number of copies
+        return 0;
+    }
+
+    @Override
+    protected List sortByQueueMode(List list) {
+        Collections.sort(list, new Comparator(){
+
+            @Override
+            public int compare(Object o1, Object o2) {
+                double diff1, diff2;
+                Message m1,m2;
+
+                if (o1 instanceof Tuple) {
+                    m1 = ((Tuple<Message, Connection>)o1).getKey();
+                    m2 = ((Tuple<Message, Connection>)o2).getKey();
+                }
+                else if (o1 instanceof Message) {
+                    m1 = (Message)o1;
+                    m2 = (Message)o2;
+                }
+                else {
+                    throw new SimError("Invalid type of objects in " +
+                            "the list");
+                }
+
+                diff1 = m1.getTtl()-m2.getTtl();
+                diff2 = m1.getHopCount()-m2.getHopCount();
+                if (diff1 == 0 && diff2 == 0) {
+                    return 0;
+                } else if (diff1 == 0) {
+                    return (diff2 < 0 ? 1 : -1);
+
+                } else {
+                    return (diff1 < 0 ? -1 : 1);
+                }
+            }
+        });
+        return list;
+    }
 
     @Override
     public void changedConnection(Connection con) {
@@ -667,33 +783,41 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
         if (con.isUp()) {
             DTNHost other = con.getOtherNode(getHost());
+            //update prophet probability
             updateDeliveryPredFor(other);
             updateTransitivePreds(other);
-            updateDestinationSet(other);
+
+            checkMessageDelivered(other);
+            //updateDestinationSet(other);
             updateActions(con);
+            initializeQtable();
 
             ageActivity();
 
-            exchangeRENS(con);
+            //exchangeRENS(con);
 
-            if (!ENS.contains(other))
-                updateENS(con);
+            updateENS(con);
             //exchangeENS(con);
 
-            initializeQtable();
-            if (con.getOtherNode(getHost())!=getHost())
+            //ageQValue(other);
+            //initializeQtable();
+            if (con.getOtherNode(getHost())!=getHost()) {
                 this.nodeCount++;
+                this.nodeCountIn200++;
+            }
 
             //setReward(other, );
-            updateQtableWhenConnected(other);
+            //updateQtableWhenConnected(other);
             /*else {
                 learn(getHost(),other,reward);
             }*/
+
 
         }
 
         if (!con.isUp()){
             updateActions(con);
+            removeZeroFromQtable();
             //ageQValue();
         }
     }
@@ -704,12 +828,14 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
     @Override
     public Message messageTransferred(String id, DTNHost from) {
         Message msg = super.messageTransferred(id, from);
+        updateDestinationSet();
         Integer nrofCopies = (Integer) msg.getProperty(MSG_COUNT_PROPERTY);
 
-        updateDestinationSetAfterNewMsgAdd(msg);
+
 
         assert nrofCopies != null : "Not a SnW message: " + msg;
-        nrofCopies = (int) Math.floor(nrofCopies / 2.0);
+        //nrofCopies = (int) Math.floor(nrofCopies / 2.0);
+        nrofCopies = 1;
         /*if (isBinary) {
              //in binary S'n'W the receiving node gets floor(n/2) copies
             nrofCopies = (int) Math.floor(nrofCopies / 2.0);
@@ -733,13 +859,15 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         makeRoomForNewMessage(msg.getSize());
 
         msg.setTtl(this.msgTtl);
-        msg.addProperty(MSG_COUNT_PROPERTY, nrofCopies);
+        msg.addProperty(MSG_COUNT_PROPERTY, calculateNROfCopies(msg));
         addToMessages(msg, true);
         updateDestinationSetAfterNewMsgAdd(msg);
         initializeQtable();
-        updateStates();
         return true;
     }
+
+
+
 
     @Override
     public void update() {
@@ -750,22 +878,57 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
         }
 
         /* try messages that could be delivered to final recipient */
-        if (exchangeDeliverableMessages() != null) {
-            return;
+        Connection con = exchangeDeliverableMessages();
+        if (null != con) {
+            DeliveredMessages++;
+            updateQtable(getHost());
+            removeFromMessages(con.getMessage().getId());
         }
 
+        if (actions.size()<2)
+            return;
         /* create a list of SAWMessages that have copies left to distribute */
         @SuppressWarnings(value = "unchecked")
         List<Message> copiesLeft = sortByQueueMode(getMessagesWithCopiesLeft());
+
+
 
         if (copiesLeft.size() > 0) {
             /* try to send those messages */
             for (Message m : copiesLeft) {
                 DTNHost dest = m.getTo();
                 Connection connection = chooseAction(dest);
-                if (connection!=null){startTransfer(m, connection);}
+                if (connection!=null){
+                    int retVal = startTransfer(m, connection);
+                    if (retVal == RCV_OK) {
+                        updateQtableTransferredDone(connection.getOtherNode(getHost()), m);
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * check the message in buffer is delivered message to connected node
+     * if so, delete message from buffer
+     * @param other
+     */
+    private void checkMessageDelivered(DTNHost other) {
+        Collection<Message> msgs = new ArrayList<>(getMessageCollection());
+
+/*            Iterator it = msgs.iterator();
+            while (it.hasNext()) {
+                Message m = (Message) it.next();
+                if (act.getRouter().isDeliveredMessage(m)) {
+                    deleteMessage(m.getId(), false);
+                }
+            }*/
+            for (Message m : msgs
+            ) {
+                if (other.getRouter().isDeliveredMessage(m)) {
+                    deleteMessage(m.getId(), false);
+                }
+            }
     }
 
 
@@ -849,8 +1012,27 @@ public class QLearningSprayAndWaitRouter extends ActiveRouter {
 
         /* reduce the amount of copies left */
         nrofCopies = (Integer) msg.getProperty(MSG_COUNT_PROPERTY);
-        nrofCopies = (int) Math.ceil(nrofCopies / 2.0);
+        //nrofCopies = (int) Math.ceil(nrofCopies / 2.0);
+        nrofCopies--;
         msg.updateProperty(MSG_COUNT_PROPERTY, nrofCopies);
+
+        updateQtableAfterTrans(con);
+    }
+
+    private void updateQtableAfterTrans(Connection con) {
+        DTNHost other = con.getOtherNode(getHost());
+        QLearningSprayAndWaitRouter router = (QLearningSprayAndWaitRouter) other.getRouter();
+        for (Map.Entry<Pair<DTNHost, DTNHost>, Double> e : router.getQ_table().entrySet()) {
+            if (this.Qtable.containsKey(e.getKey())) {
+                if (e.getValue() > Qtable.get(e.getKey())) {
+                    Qtable.put(e.getKey(), e.getValue());
+                } else if (e.getValue() < Qtable.get(e.getKey())) {
+                    e.setValue(Qtable.get(e.getKey()));
+                }
+            } else {
+                Qtable.put(e.getKey(), e.getValue());
+            }
+        }
     }
 
     @Override
